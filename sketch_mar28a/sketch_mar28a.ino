@@ -4,6 +4,7 @@
 #include "soc/rtc_cntl_reg.h"  // Disable brownour problems
 #include "driver/rtc_io.h"
 #include "mbedtls/base64.h"
+#include <FastCRC.h>
 
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -23,8 +24,14 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+struct packet{
+  unsigned int packetNumber;
+  unsigned int numberOfPackets;
+  uint16_t crc;
+  uint8_t *payload;
+};
 
-
+FastCRC16 CRC16;
 int timer = 0; 
 camera_fb_t * fb = NULL;
 
@@ -72,6 +79,27 @@ void setup() {
   }
 }
 
+packet* packetIt(uint8_t data[], size_t len){
+  if(len == 0) return NULL;
+  unsigned int numberOfPackets = 1 + (( len - 1) / 256); //Racuna broj paketa zaokruzen na gore;
+  packet *packets = (packet *)malloc(sizeof(packet)*numberOfPackets);
+  for(int i = 0; i<numberOfPackets; i++){
+       uint8_t payload[256];
+       for(int j = i*256; j<(i+1)*256; j++){
+          if(j>len){
+              payload[j-i*256] = 0;
+              continue;
+          }
+          payload[j-i*256] = data[j]; 
+       }
+       packets[i].packetNumber = i;
+       packets[i].numberOfPackets =  numberOfPackets;
+       packets[i].payload = payload;
+       packets[i].crc = CRC16.xmodem(payload, len);
+  }
+  return packets;
+}
+
 void loop() {
 
   if(Serial.available()) {
@@ -83,14 +111,23 @@ void loop() {
           Serial.println("Camera capture failed");
           return;
         }
-        
-        unsigned char output[fb->len];
-        size_t outlen;
-        mbedtls_base64_encode(output, 64, &outlen, fb->buf, fb->len);
-        for(int i = 0; i<fb->len; i++){
-          Serial.println(fb->buf[i]);
+        packet *packets = packetIt(fb->buf, fb->len);
+
+        //Test print
+        /*for(int i =0; i<fb->len; i++){
+          Serial.print(fb->buf[i], HEX);
+        }*/
+        Serial.println("");
+        for(int i =0; i<256; i++){
+          Serial.print(packets[0].payload[i], HEX);
         }
         Serial.println("");
+        Serial.println(packets[0].crc, HEX);
+        Serial.println("");
+        //-----------------------------
+
+        
+        free(packets);
         esp_camera_fb_return(fb); 
         // Turns off the ESP32-CAM white on-board LED (flash) connected to GPIO 4
         pinMode(4, OUTPUT);
